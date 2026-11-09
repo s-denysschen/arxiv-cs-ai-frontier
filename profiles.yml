@@ -1,0 +1,15 @@
+arxiv_frontier:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "arxiv_frontier.duckdb"
+      extensions:
+        - httpfs
+        - parquet
+        - aws
+      secrets:
+        - type: s3
+          provider: credential_chain
+          region: eu-north-1
+      threads: 4

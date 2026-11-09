@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: stg_arxiv_papers
+    description: "Deduplicated cs.AI arXiv pre-prints with cleaned abstracts and earliest publication timestamps."
+    columns:
+      - name: arxiv_id
+        description: "Base arXiv identifier without version suffix"
+        tests:
+          - unique
+          - not_null
+      - name: title
+        tests:
+          - not_null
+      - name: clean_abstract
+        tests:
+          - not_null
+      - name: published_epoch
+        tests:
+          - not_null

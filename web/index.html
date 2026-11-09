@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>cs.AI Frontier Radar</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { margin: 0; background: #020617; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+    canvas { display: block; cursor: grab; }
+    canvas:active { cursor: grabbing; }
+  </style>
+</head>
+<body class="relative w-screen h-screen select-none">
+
+  <!-- Top Left HUD & Controls -->
+  <div class="absolute top-4 left-4 z-10 w-80 bg-slate-900/90 backdrop-blur border border-slate-800 rounded-xl p-4 shadow-2xl space-y-4">
+    <div>
+      <div class="flex items-center justify-between">
+        <h1 class="text-base font-bold tracking-tight text-sky-400">arXiv cs.AI Frontier</h1>
+        <span id="stats-badge" class="text-xs bg-sky-500/10 text-sky-300 border border-sky-500/20 px-2 py-0.5 rounded-full">Loading...</span>
+      </div>
+      <p class="text-xs text-slate-400 mt-1">Center = older foundational papers. Outer ring = newest pre-prints. Node diameter = Bounded Causal Novelty.</p>
+    </div>
+
+    <div class="space-y-1">
+      <div class="flex justify-between text-xs">
+        <span class="text-slate-300">Search Keyword / ID</span>
+      </div>
+      <input id="search-input" type="text" placeholder="e.g., agent, reasoning, 2611..." 
+        class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-sky-500" />
+    </div>
+
+    <div class="space-y-1">
+      <div class="flex justify-between text-xs">
+        <span class="text-slate-300">Min Novelty Diameter</span>
+        <span id="size-val" class="text-sky-400 font-mono">3.5px</span>
+      </div>
+      <input id="size-slider" type="range" min="3.5" max="20" step="0.5" value="3.5" class="w-full accent-sky-400" />
+    </div>
+
+    <div class="space-y-1">
+      <div class="flex justify-between text-xs">
+        <span class="text-slate-300">Temporal Growth Frontier</span>
+        <span id="date-val" class="text-sky-400 font-mono">All Dates</span>
+      </div>
+      <input id="time-slider" type="range" min="0" max="100" value="100" class="w-full accent-sky-400" />
+    </div>
+
+    <div class="pt-1 border-t border-slate-800 flex justify-between items-center text-[11px] text-slate-400">
+      <span>Scroll to zoom • Drag to pan</span>
+      <button id="reset-btn" class="text-sky-400 hover:underline">Reset View</button>
+    </div>
+  </div>
+
+  <!-- Right Side Paper Inspector & LLM Delta Drawer -->
+  <div id="drawer" class="hidden absolute top-4 right-4 bottom-4 z-10 w-96 bg-slate-900/95 backdrop-blur border border-slate-800 rounded-xl p-5 shadow-2xl flex flex-col justify-between overflow-y-auto">
+    <div class="space-y-4">
+      <div class="flex justify-between items-start gap-2">
+        <span id="d-sector" class="text-[11px] uppercase tracking-wider font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded">Sector</span>
+        <button id="close-drawer" class="text-slate-400 hover:text-white text-sm">✕</button>
+      </div>
+      <h2 id="d-title" class="text-sm font-bold text-white leading-snug"></h2>
+      <div class="grid grid-cols-3 gap-2 bg-slate-950/80 p-2.5 rounded-lg border border-slate-800 text-xs">
+        <div>
+          <div class="text-slate-500 text-[10px]">arXiv ID</div>
+          <a id="d-id" href="#" target="_blank" class="text-sky-400 font-mono hover:underline"></a>
+        </div>
+        <div>
+          <div class="text-slate-500 text-[10px]">Published</div>
+          <div id="d-date" class="text-slate-200 font-mono"></div>
+        </div>
+        <div>
+          <div class="text-slate-500 text-[10px]">Novelty Score</div>
+          <div id="d-novelty" class="text-emerald-400 font-mono font-semibold"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="text-xs font-semibold text-slate-300 mb-1.5">Connected Lineage in Graph</div>
+        <div id="d-neighbors" class="space-y-1.5 text-xs text-slate-400 max-h-40 overflow-y-auto"></div>
+      </div>
+
+      <div class="pt-3 border-t border-slate-800 space-y-2">
+        <button id="llm-btn" class="w-full py-2 px-3 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs rounded-lg transition">
+          ⚡ Compute Methodological Delta (API)
+        </button>
+        <div id="llm-output" class="hidden text-xs bg-slate-950 border border-slate-800 rounded-lg p-3 text-slate-300 space-y-2 leading-relaxed"></div>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="frontier-canvas"></canvas>
+
+  <script>
+    const PALETTE = [
+      "#38bdf8", "#818cf8", "#c084fc", "#f472b6", "#fb7185", "#fb923c",
+      "#facc15", "#a3e635", "#34d399", "#2dd4bf", "#22d3ee", "#60a5fa"
+    ];
+
+    let graph = { nodes: [], edges: [], sectors: [] };
+    let nodeMap = new Map();
+    let adjMap = new Map();
+    let selectedNode = null;
+    let hoveredNode = null;
+
+    // Camera state
+    let cam = { x: 0, y: 0, zoom: 1 };
+    let isDragging = false;
+    let dragStart = { x: 0, y: 0 };
+
+    // Filters
+    let minSize = 3.5;
+    let maxNodeIdx = Infinity;
+    let searchQuery = "";
+
+    const canvas = document.getElementById("frontier-canvas");
+    const ctx = canvas.getContext("2d");
+
+    function resize() {
+      canvas.width = window.innerWidth * window.devicePixelRatio;
+      canvas.height = window.innerHeight * window.devicePixelRatio;
+      canvas.style.width = window.innerWidth + "px";
+      canvas.style.height = window.innerHeight + "px";
+      draw();
+    }
+    window.addEventListener("resize", resize);
+
+    fetch("./frontier_graph.json")
+      .then(r => r.json())
+      .then(data => {
+        graph = data;
+        graph.nodes.forEach((n, idx) => {
+          n._idx = idx;
+          nodeMap.set(n.id, n);
+          adjMap.set(n.id, new Set());
+        });
+        graph.edges.forEach(([u, v]) => {
+          if (adjMap.has(u) && adjMap.has(v)) {
+            adjMap.get(u).add(v);
+            adjMap.get(v).add(u);
+          }
+        });
+        maxNodeIdx = graph.nodes.length - 1;
+        document.getElementById("time-slider").max = maxNodeIdx;
+        document.getElementById("time-slider").value = maxNodeIdx;
+        document.getElementById("stats-badge").textContent = `${graph.nodes.length} Papers • ${graph.edges.length} Links`;
+        resize();
+      });
+
+    function worldToScreen(wx, wy) {
+      const scale = Math.min(canvas.width, canvas.height) * 0.38 * cam.zoom;
+      return [
+        canvas.width / 2 + (wx + cam.x) * scale,
+        canvas.height / 2 + (wy + cam.y) * scale
+      ];
+    }
+
+    function isNodeVisible(n) {
+      if (n.size < minSize || n._idx > maxNodeIdx) return false;
+      if (searchQuery && !n.title.toLowerCase().includes(searchQuery) && !n.id.includes(searchQuery)) return false;
+      return true;
+    }
+
+    function draw() {
+      if (!graph.nodes.length) return;
+      const dpr = window.devicePixelRatio;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const [cx, cy] = worldToScreen(0, 0);
+      const baseScale = Math.min(canvas.width, canvas.height) * 0.38 * cam.zoom;
+
+      // 1. Draw Concentric Temporal Guide Rings
+      ctx.save();
+      [0.25, 0.5, 0.75, 1.0].forEach(r => {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * baseScale, 0, Math.PI * 2);
+        ctx.strokeStyle = r === 1.0 ? "rgba(56, 189, 248, 0.35)" : "rgba(148, 163, 184, 0.14)";
+        ctx.lineWidth = r === 1.0 ? 1.5 * dpr : 1 * dpr;
+        ctx.setLineDash(r === 1.0 ? [] : [4 * dpr, 6 * dpr]);
+        ctx.stroke();
+      });
+      ctx.restore();
+
+      // 2. Draw 12 Angular Sector Dividers & Perimeter Labels
+      ctx.save();
+      graph.sectors.forEach((sec, i) => {
+        const divAngle = i * (Math.PI / 6);
+        const [rx, ry] = worldToScreen(Math.cos(divAngle) * 1.05, Math.sin(divAngle) * 1.05);
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(rx, ry);
+        ctx.strokeStyle = "rgba(148, 163, 184, 0.08)";
+        ctx.lineWidth = 1 * dpr;
+        ctx.stroke();
+
+        // Sector Text Label on Outer Perimeter (Smart Radial Alignment)
+        const [lx, ly] = worldToScreen(Math.cos(sec.angle_rad) * 1.08, Math.sin(sec.angle_rad) * 1.08);
+        ctx.fillStyle = PALETTE[sec.id % PALETTE.length];
+        ctx.font = `600 ${11 * dpr}px system-ui`;
+        const cosA = Math.cos(sec.angle_rad);
+        ctx.textAlign = Math.abs(cosA) < 0.25 ? "center" : (cosA > 0 ? "left" : "right");
+        ctx.textBaseline = Math.sin(sec.angle_rad) > 0 ? "top" : "bottom";
+        ctx.fillText(sec.label, lx, ly);
+
+      });
+      ctx.restore();
+
+      // 3. Draw Causal Web Edges
+      const activeNeighbors = selectedNode ? adjMap.get(selectedNode.id) : null;
+      ctx.save();
+      graph.edges.forEach(([uId, vId]) => {
+        const u = nodeMap.get(uId);
+        const v = nodeMap.get(vId);
+        if (!u || !v || !isNodeVisible(u) || !isNodeVisible(v)) return;
+
+        const isHighlighted = selectedNode && (u.id === selectedNode.id || v.id === selectedNode.id);
+        if (selectedNode && !isHighlighted) return; // Hide non-connected edges when inspecting a node
+
+        const [x1, y1] = worldToScreen(u.x, u.y);
+        const [x2, y2] = worldToScreen(v.x, v.y);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = isHighlighted ? "rgba(56, 189, 248, 0.85)" : "rgba(148, 163, 184, 0.12)";
+        ctx.lineWidth = (isHighlighted ? 1.8 : 0.6) * dpr;
+        ctx.stroke();
+      });
+      ctx.restore();
+
+      // 4. Draw Paper Nodes
+      graph.nodes.forEach(n => {
+        if (!isNodeVisible(n)) return;
+        const [sx, sy] = worldToScreen(n.x, n.y);
+        const radius = (n.size * 0.45) * Math.pow(cam.zoom, 0.35) * dpr;
+        const isSel = selectedNode && selectedNode.id === n.id;
+        const isNbr = activeNeighbors && activeNeighbors.has(n.id);
+
+        ctx.beginPath();
+        ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+        const baseColor = PALETTE[n.sector % PALETTE.length];
+
+        if (selectedNode && !isSel && !isNbr) {
+          ctx.fillStyle = "rgba(51, 65, 85, 0.25)";
+        } else {
+          ctx.fillStyle = baseColor;
+        }
+        ctx.fill();
+
+        if (isSel || isNbr || n.size >= 15) {
+          ctx.lineWidth = (isSel ? 2.5 : 1.2) * dpr;
+          ctx.strokeStyle = isSel ? "#ffffff" : "rgba(255,255,255,0.7)";
+          ctx.stroke();
+        }
+      });
+
+      // 5. Hover Tooltip
+      if (hoveredNode) {
+        const [hx, hy] = worldToScreen(hoveredNode.x, hoveredNode.y);
+        ctx.font = `600 ${11 * dpr}px system-ui`;
+        const label = `[${hoveredNode.id}] ${hoveredNode.title.slice(0, 75)}${hoveredNode.title.length > 75 ? "..." : ""}`;
+        const pad = 6 * dpr;
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = "rgba(15, 23, 42, 0.95)";
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 1 * dpr;
+        ctx.beginPath();
+        ctx.roundRect(hx + 10 * dpr, hy - 14 * dpr, tw + pad * 2, 24 * dpr, 5 * dpr);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#f8fafc";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, hx + 10 * dpr + pad, hy - 2 * dpr);
+      }
+    }
+
+    // Mouse Interaction (Pan, Zoom, Hover, Click)
+    canvas.addEventListener("mousedown", e => {
+      isDragging = true;
+      dragStart = { x: e.clientX, y: e.clientY };
+    });
+
+    window.addEventListener("mouseup", e => {
+      const moved = Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y);
+      isDragging = false;
+      if (moved < 4) {
+        if (hoveredNode) openDrawer(hoveredNode);
+        else {
+          selectedNode = null;
+          document.getElementById("drawer").classList.add("hidden");
+          draw();
+        }
+      }
+    });
+
+    canvas.addEventListener("mousemove", e => {
+      const dpr = window.devicePixelRatio;
+      if (isDragging) {
+        const scale = Math.min(canvas.width, canvas.height) * 0.38 * cam.zoom;
+        cam.x += ((e.clientX - dragStart.x) * dpr) / scale;
+        cam.y += ((e.clientY - dragStart.y) * dpr) / scale;
+        dragStart = { x: e.clientX, y: e.clientY };
+        draw();
+        return;
+      }
+
+      // Hit-test nearest node
+      const mx = e.clientX * dpr;
+      const my = e.clientY * dpr;
+      let best = null;
+      let minDist = 14 * dpr;
+      for (const n of graph.nodes) {
+        if (!isNodeVisible(n)) continue;
+        const [sx, sy] = worldToScreen(n.x, n.y);
+        const d = Math.hypot(mx - sx, my - sy);
+        if (d < minDist) {
+          minDist = d;
+          best = n;
+        }
+      }
+      if (best !== hoveredNode) {
+        hoveredNode = best;
+        canvas.style.cursor = best ? "pointer" : "grab";
+        draw();
+      }
+    });
+
+    canvas.addEventListener("wheel", e => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.12 : 0.89;
+      cam.zoom = Math.max(0.4, Math.min(12, cam.zoom * factor));
+      draw();
+    }, { passive: false });
+
+    function openDrawer(n) {
+      selectedNode = n;
+      document.getElementById("drawer").classList.remove("hidden");
+      document.getElementById("d-sector").textContent = n.sector_label;
+      document.getElementById("d-title").textContent = n.title;
+      const idEl = document.getElementById("d-id");
+      idEl.textContent = n.id;
+      idEl.href = `https://arxiv.org/abs/${n.id}`;
+      document.getElementById("d-date").textContent = n.published;
+      document.getElementById("d-novelty").textContent = `${n.novelty.toFixed(3)} (${n.size.toFixed(1)}px)`;
+      document.getElementById("llm-output").classList.add("hidden");
+
+      const nbrContainer = document.getElementById("d-neighbors");
+      nbrContainer.innerHTML = "";
+      const nbrs = Array.from(adjMap.get(n.id) || []);
+      if (!nbrs.length) {
+        nbrContainer.innerHTML = `<div class="text-slate-500 italic">No thresholded edges (>0.65 cosine sim).</div>`;
+      } else {
+        nbrs.forEach(nbrId => {
+          const nb = nodeMap.get(nbrId);
+          const role = nb._idx < n._idx ? "← Prior Parent" : "→ Subsequent Child";
+          const div = document.createElement("div");
+          div.className = "p-2 rounded bg-slate-950 border border-slate-800 hover:border-sky-500/50 cursor-pointer";
+          div.innerHTML = `<div class="text-[10px] text-sky-400 font-mono">${role} • ${nb.id} (${nb.published})</div><div class="text-slate-200 line-clamp-1">${nb.title}</div>`;
+          div.onclick = () => openDrawer(nb);
+          nbrContainer.appendChild(div);
+        });
+      }
+      draw();
+    }
+
+    // Controls wiring
+    document.getElementById("close-drawer").onclick = () => {
+      selectedNode = null;
+      document.getElementById("drawer").classList.add("hidden");
+      draw();
+    };
+    document.getElementById("reset-btn").onclick = () => {
+      cam = { x: 0, y: 0, zoom: 1 };
+      draw();
+    };
+    document.getElementById("size-slider").oninput = e => {
+      minSize = parseFloat(e.target.value);
+      document.getElementById("size-val").textContent = minSize.toFixed(1) + "px";
+      draw();
+    };
+    document.getElementById("time-slider").oninput = e => {
+      maxNodeIdx = parseInt(e.target.value, 10);
+      const node = graph.nodes[maxNodeIdx];
+      document.getElementById("date-val").textContent = node ? `Up to ${node.published}` : "All";
+      draw();
+    };
+    document.getElementById("search-input").oninput = e => {
+      searchQuery = e.target.value.trim().toLowerCase();
+      draw();
+    };
+    document.getElementById("llm-btn").onclick = () => {
+    if (!selectedNode) return;
+    const out = document.getElementById("llm-output");
+    out.classList.remove("hidden");
+    const parentLinks = (selectedNode.parents || [])
+        .map(pid => {
+        const p = nodeMap.get(pid);
+        return p ? `[${p.id}] ${p.title.slice(0, 55)}...` : pid;
+        })
+        .join("<br/>• ");
+
+    out.innerHTML = `
+        <div><strong class="text-amber-400">Abstract Excerpt:</strong> ${selectedNode.abstract || "N/A"}</div>
+        <div><strong class="text-sky-400">Closest Prior Baselines:</strong><br/>• ${parentLinks || "Foundational seed node"}</div>
+        <div><strong class="text-emerald-400">Methodological Delta:</strong> ${selectedNode.delta || "High semantic divergence from prior window."}</div>
+    `;
+    };
+
+  </script>
+</body>
+</html>
