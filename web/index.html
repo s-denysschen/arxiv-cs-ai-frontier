@@ -112,6 +112,7 @@
     let minSize = 3.5;
     let maxNodeIdx = Infinity;
     let searchQuery = "";
+    let onlyWithCode = false;
 
     const canvas = document.getElementById("frontier-canvas");
     const ctx = canvas.getContext("2d");
@@ -128,6 +129,10 @@
     fetch("./frontier_graph.json")
       .then(r => r.json())
       .then(data => {
+        const hashId = window.location.hash.replace("#paper=", "");
+        if (hashId && nodeMap.has(hashId)) {
+            openDrawer(nodeMap.get(hashId));
+            }
         graph = data;
         graph.nodes.forEach((n, idx) => {
           n._idx = idx;
@@ -156,10 +161,12 @@
     }
 
     function isNodeVisible(n) {
-      if (n.size < minSize || n._idx > maxNodeIdx) return false;
-      if (searchQuery && !n.title.toLowerCase().includes(searchQuery) && !n.id.includes(searchQuery)) return false;
-      return true;
-    }
+        if (n.size < minSize || n._idx > maxNodeIdx) return false;
+        if (onlyWithCode && !n.has_code) return false;
+        if (searchQuery && !n.title.toLowerCase().includes(searchQuery) && !n.id.includes(searchQuery)) return false;
+        return true;
+        }
+
 
     function draw() {
       if (!graph.nodes.length) return;
@@ -245,6 +252,13 @@
           ctx.fillStyle = baseColor;
         }
         ctx.fill();
+
+        if (n.has_code) {
+            ctx.lineWidth = 1.6 * dpr;
+            ctx.strokeStyle = "#10b981";
+            ctx.stroke();
+            }
+
 
         if (isSel || isNbr || n.size >= 15) {
           ctx.lineWidth = (isSel ? 2.5 : 1.2) * dpr;
@@ -333,6 +347,7 @@
     }, { passive: false });
 
     function openDrawer(n) {
+      window.history.replaceState(null, "", "#paper=" + n.id);
       selectedNode = n;
       document.getElementById("drawer").classList.remove("hidden");
       document.getElementById("d-sector").textContent = n.sector_label;
@@ -405,6 +420,11 @@
         <div><strong class="text-emerald-400">Methodological Delta:</strong> ${selectedNode.delta || "High semantic divergence from prior window."}</div>
     `;
     };
+    document.getElementById("code-toggle").onchange = e => {
+        onlyWithCode = e.target.checked;
+        draw();
+        };
+
 
   </script>
 </body>
