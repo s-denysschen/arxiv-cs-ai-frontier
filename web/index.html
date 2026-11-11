@@ -26,7 +26,7 @@
       <div class="flex justify-between text-xs">
         <span class="text-slate-300">Search Keyword / ID</span>
       </div>
-      <input id="search-input" type="text" placeholder="e.g., agent, reasoning, 2611..." 
+      <input id="search-input" type="text" placeholder="e.g., DeepSeek, DPO, 2501..." 
         class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-sky-500" />
     </div>
 
@@ -45,6 +45,16 @@
       </div>
       <input id="time-slider" type="range" min="0" max="100" value="100" class="w-full accent-sky-400" />
     </div>
+
+    <label class="flex items-center justify-between text-xs text-slate-300 cursor-pointer pt-1">
+      <span>Only Papers with Code / GitHub</span>
+      <input id="code-toggle" type="checkbox" class="accent-emerald-400 w-3.5 h-3.5 rounded" />
+    </label>
+
+    <label class="flex items-center justify-between text-xs text-amber-300 cursor-pointer pt-1">
+      <span>🏆 Only Validated Landmarks (2023–25)</span>
+      <input id="landmark-toggle" type="checkbox" class="accent-amber-400 w-3.5 h-3.5 rounded" />
+    </label>
 
     <div class="pt-1 border-t border-slate-800 flex justify-between items-center text-[11px] text-slate-400">
       <span>Scroll to zoom • Drag to pan</span>
@@ -82,7 +92,7 @@
 
       <div class="pt-3 border-t border-slate-800 space-y-2">
         <button id="llm-btn" class="w-full py-2 px-3 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs rounded-lg transition">
-          ⚡ Compute Methodological Delta (API)
+          ⚡ Compute Methodological Delta
         </button>
         <div id="llm-output" class="hidden text-xs bg-slate-950 border border-slate-800 rounded-lg p-3 text-slate-300 space-y-2 leading-relaxed"></div>
       </div>
@@ -113,6 +123,7 @@
     let maxNodeIdx = Infinity;
     let searchQuery = "";
     let onlyWithCode = false;
+    let onlyLandmarks = false;
 
     const canvas = document.getElementById("frontier-canvas");
     const ctx = canvas.getContext("2d");
@@ -129,10 +140,6 @@
     fetch("./frontier_graph.json")
       .then(r => r.json())
       .then(data => {
-        const hashId = window.location.hash.replace("#paper=", "");
-        if (hashId && nodeMap.has(hashId)) {
-            openDrawer(nodeMap.get(hashId));
-            }
         graph = data;
         graph.nodes.forEach((n, idx) => {
           n._idx = idx;
@@ -150,6 +157,12 @@
         document.getElementById("time-slider").value = maxNodeIdx;
         document.getElementById("stats-badge").textContent = `${graph.nodes.length} Papers • ${graph.edges.length} Links`;
         resize();
+
+        // Deep-link support (#paper=2501.12948) AFTER nodeMap is populated
+        const hashId = window.location.hash.replace("#paper=", "");
+        if (hashId && nodeMap.has(hashId)) {
+          openDrawer(nodeMap.get(hashId));
+        }
       });
 
     function worldToScreen(wx, wy) {
@@ -161,15 +174,17 @@
     }
 
     function isNodeVisible(n) {
-        if (n.size < minSize || n._idx > maxNodeIdx) return false;
-        if (onlyWithCode && !n.has_code) return false;
-        if (searchQuery && !n.title.toLowerCase().includes(searchQuery) && !n.id.includes(searchQuery)) return false;
-        return true;
-        }
-
+      if (n.size < minSize || n._idx > maxNodeIdx) return false;
+      if (onlyWithCode && !n.has_code) return false;
+      if (onlyLandmarks && !n.is_landmark) return false;
+      if (searchQuery && !n.title.toLowerCase().includes(searchQuery) && !n.id.includes(searchQuery)) return false;
+      return true;
+    }
 
     function draw() {
       if (!graph.nodes.length) return;
+      if (hoveredNode && !isNodeVisible(hoveredNode)) hoveredNode = null;
+
       const dpr = window.devicePixelRatio;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -208,7 +223,6 @@
         ctx.textAlign = Math.abs(cosA) < 0.25 ? "center" : (cosA > 0 ? "left" : "right");
         ctx.textBaseline = Math.sin(sec.angle_rad) > 0 ? "top" : "bottom";
         ctx.fillText(sec.label, lx, ly);
-
       });
       ctx.restore();
 
@@ -221,7 +235,7 @@
         if (!u || !v || !isNodeVisible(u) || !isNodeVisible(v)) return;
 
         const isHighlighted = selectedNode && (u.id === selectedNode.id || v.id === selectedNode.id);
-        if (selectedNode && !isHighlighted) return; // Hide non-connected edges when inspecting a node
+        if (selectedNode && !isHighlighted) return;
 
         const [x1, y1] = worldToScreen(u.x, u.y);
         const [x2, y2] = worldToScreen(v.x, v.y);
@@ -254,11 +268,16 @@
         ctx.fill();
 
         if (n.has_code) {
-            ctx.lineWidth = 1.6 * dpr;
-            ctx.strokeStyle = "#10b981";
-            ctx.stroke();
-            }
+          ctx.lineWidth = 1.6 * dpr;
+          ctx.strokeStyle = "#10b981";
+          ctx.stroke();
+        }
 
+        if (n.is_landmark) {
+          ctx.lineWidth = 2.5 * dpr;
+          ctx.strokeStyle = "#facc15";
+          ctx.stroke();
+        }
 
         if (isSel || isNbr || n.size >= 15) {
           ctx.lineWidth = (isSel ? 2.5 : 1.2) * dpr;
@@ -271,11 +290,12 @@
       if (hoveredNode) {
         const [hx, hy] = worldToScreen(hoveredNode.x, hoveredNode.y);
         ctx.font = `600 ${11 * dpr}px system-ui`;
-        const label = `[${hoveredNode.id}] ${hoveredNode.title.slice(0, 75)}${hoveredNode.title.length > 75 ? "..." : ""}`;
+        const prefix = hoveredNode.is_landmark ? "🏆 " : "";
+        const label = `${prefix}[${hoveredNode.id}] ${hoveredNode.title.slice(0, 75)}${hoveredNode.title.length > 75 ? "..." : ""}`;
         const pad = 6 * dpr;
         const tw = ctx.measureText(label).width;
         ctx.fillStyle = "rgba(15, 23, 42, 0.95)";
-        ctx.strokeStyle = "#38bdf8";
+        ctx.strokeStyle = hoveredNode.is_landmark ? "#facc15" : "#38bdf8";
         ctx.lineWidth = 1 * dpr;
         ctx.beginPath();
         ctx.roundRect(hx + 10 * dpr, hy - 14 * dpr, tw + pad * 2, 24 * dpr, 5 * dpr);
@@ -301,6 +321,7 @@
         if (hoveredNode) openDrawer(hoveredNode);
         else {
           selectedNode = null;
+          window.history.replaceState(null, "", window.location.pathname);
           document.getElementById("drawer").classList.add("hidden");
           draw();
         }
@@ -350,7 +371,7 @@
       window.history.replaceState(null, "", "#paper=" + n.id);
       selectedNode = n;
       document.getElementById("drawer").classList.remove("hidden");
-      document.getElementById("d-sector").textContent = n.sector_label;
+      document.getElementById("d-sector").textContent = n.is_landmark ? `🏆 Landmark • ${n.sector_label}` : n.sector_label;
       document.getElementById("d-title").textContent = n.title;
       const idEl = document.getElementById("d-id");
       idEl.textContent = n.id;
@@ -381,6 +402,7 @@
     // Controls wiring
     document.getElementById("close-drawer").onclick = () => {
       selectedNode = null;
+      window.history.replaceState(null, "", window.location.pathname);
       document.getElementById("drawer").classList.add("hidden");
       draw();
     };
@@ -404,28 +426,30 @@
       draw();
     };
     document.getElementById("llm-btn").onclick = () => {
-    if (!selectedNode) return;
-    const out = document.getElementById("llm-output");
-    out.classList.remove("hidden");
-    const parentLinks = (selectedNode.parents || [])
+      if (!selectedNode) return;
+      const out = document.getElementById("llm-output");
+      out.classList.remove("hidden");
+      const parentLinks = (selectedNode.parents || [])
         .map(pid => {
-        const p = nodeMap.get(pid);
-        return p ? `[${p.id}] ${p.title.slice(0, 55)}...` : pid;
+          const p = nodeMap.get(pid);
+          return p ? `[${p.id}] ${p.title.slice(0, 55)}...` : pid;
         })
         .join("<br/>• ");
 
-    out.innerHTML = `
+      out.innerHTML = `
         <div><strong class="text-amber-400">Abstract Excerpt:</strong> ${selectedNode.abstract || "N/A"}</div>
         <div><strong class="text-sky-400">Closest Prior Baselines:</strong><br/>• ${parentLinks || "Foundational seed node"}</div>
         <div><strong class="text-emerald-400">Methodological Delta:</strong> ${selectedNode.delta || "High semantic divergence from prior window."}</div>
-    `;
+      `;
     };
     document.getElementById("code-toggle").onchange = e => {
-        onlyWithCode = e.target.checked;
-        draw();
-        };
-
-
+      onlyWithCode = e.target.checked;
+      draw();
+    };
+    document.getElementById("landmark-toggle").onchange = e => {
+      onlyLandmarks = e.target.checked;
+      draw();
+    };
   </script>
 </body>
 </html>

@@ -9,7 +9,7 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    steps:
+      steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -38,6 +38,8 @@ jobs:
           dbt test --profiles-dir .
 
       - name: Compute Embeddings, Polar UMAP & Bounded Novelty
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python3 pipeline/build_frontier.py
 
       - name: Publish Updated Web Bundle to S3 & Invalidate CloudFront
@@ -45,8 +47,3 @@ jobs:
           aws s3 sync web/ s3://arxiv-frontier-lake-sjarko-2026/public-web/
           DIST_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[0].Id" --output text)
           aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/frontier_graph.json" "/index.html"
-
-      - name: Compute Embeddings, Polar UMAP & Bounded Novelty
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python3 pipeline/build_frontier.py

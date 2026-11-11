@@ -4,7 +4,7 @@
 
 WITH raw_ingest AS (
     SELECT *
-    FROM read_parquet('s3://arxiv-frontier-lake-sjarko-2026/bronze/cs_ai/dt=*/batch_*.parquet')
+    FROM read_parquet('s3://arxiv-frontier-lake-sjarko-2026/bronze/cs_ai/dt=*/*.parquet')
 ),
 
 deduped AS (
@@ -36,4 +36,4 @@ SELECT
     epoch(first_published_at) AS published_epoch
 FROM deduped
 WHERE rn = 1
-  AND first_published_at >= CURRENT_TIMESTAMP - INTERVAL '90 days'
+  AND first_published_at >= TIMESTAMP '2023-01-01 00:00:00'
