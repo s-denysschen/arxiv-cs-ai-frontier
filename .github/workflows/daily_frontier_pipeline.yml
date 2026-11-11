@@ -4,12 +4,12 @@ on:
   schedule:
     # Runs Mon-Fri at 04:30 UTC (30 mins after the 04:00 UTC AWS Lambda crawler)
     - cron: "30 4 * * 1-5"
-  workflow_dispatch: # Lets you trigger a build manually with 1 click on GitHub
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-      steps:
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -38,8 +38,6 @@ jobs:
           dbt test --profiles-dir .
 
       - name: Compute Embeddings, Polar UMAP & Bounded Novelty
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python3 pipeline/build_frontier.py
 
       - name: Publish Updated Web Bundle to S3 & Invalidate CloudFront
